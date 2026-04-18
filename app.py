@@ -154,14 +154,17 @@ def check_api():
         return _API_READY
     try:
         import anthropic as _a   # noqa
-        key = st.secrets.get("ANTHROPIC_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY", "")
+        try:
+            key = st.secrets["ANTHROPIC_API_KEY"]
+        except (KeyError, FileNotFoundError):
+            key = os.environ.get("ANTHROPIC_API_KEY", "")
         if key:
             os.environ["ANTHROPIC_API_KEY"] = key
-        _API_READY = bool(os.environ.get('ANTHROPIC_API_KEY'))
+        _API_READY = bool(key)
     except ImportError:
         _API_READY = False
     return _API_READY
-
+  
 _PROMPT = """You are analysing two tarot cards for a homeostatic balancing prediction system.
 
 The Match Force sets the energetic context of the match. A team card can balance it in one of two ways:
