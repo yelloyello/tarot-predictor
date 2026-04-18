@@ -154,8 +154,9 @@ def check_api():
         return _API_READY
     try:
         import anthropic as _a   # noqa
-        # PASTE YOUR KEY ON THE LINE BELOW:
-        os.environ["ANTHROPIC_API_KEY"] = "" 
+        key = st.secrets.get("ANTHROPIC_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY", "")
+        if key:
+            os.environ["ANTHROPIC_API_KEY"] = key
         _API_READY = bool(os.environ.get('ANTHROPIC_API_KEY'))
     except ImportError:
         _API_READY = False
