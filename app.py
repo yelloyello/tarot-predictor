@@ -252,7 +252,7 @@ def build_history(_s1, _mm):
         res = nm(r.get('Outcome',''))
         if not res: continue
         exact[(cl(r.get('Home','')), cl(r.get('Away','')), cl(r.get('Match Force','')))][res] += 1
-    return exact
+     return {k: dict(v) for k, v in exact.items()}
 
 _history = build_history(sheet1, meaning_map)
 
