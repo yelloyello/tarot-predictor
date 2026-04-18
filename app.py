@@ -29,6 +29,7 @@ st.set_page_config(page_title="Tarot Predictor V9", layout="wide")
 CACHE_FILE    = "resonance_cache.json"
 DATA_FILE     = "data.xlsx"
 API_MODEL     = "claude-sonnet-4-5"
+os.environ["ANTHROPIC_API_KEY"] = "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"  # temp
 
 # Minimum resonance score to count a card as "balancing" the MF
 BALANCE_MIN   = 0.35
@@ -149,21 +150,7 @@ if 'rcache' not in st.session_state:
 _API_READY = None
 
 def check_api():
-    global _API_READY
-    if _API_READY is not None:
-        return _API_READY
-    try:
-        import anthropic as _a   # noqa
-        try:
-            key = st.secrets["ANTHROPIC_API_KEY"]
-        except Exception:          # ← catch anything, not just KeyError/FileNotFoundError
-            key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if key:
-            os.environ["ANTHROPIC_API_KEY"] = key
-        _API_READY = bool(key)
-    except ImportError:
-        _API_READY = False
-    return _API_READY
+    return True
   
 _PROMPT = """You are analysing two tarot cards for a homeostatic balancing prediction system.
 
