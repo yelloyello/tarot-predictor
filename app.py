@@ -248,11 +248,11 @@ def build_history(_s1, _mm):
         if x == '2': return 'Away'
         if x.upper().startswith('X'): return 'Draw'
         return None
-    for _, r in _s1.iterrows():
+for _, r in _s1.iterrows():
         res = nm(r.get('Outcome',''))
         if not res: continue
         exact[(cl(r.get('Home','')), cl(r.get('Away','')), cl(r.get('Match Force','')))][res] += 1
-     return {k: dict(v) for k, v in exact.items()}
+return {k: dict(v) for k, v in exact.items()}  
 
 _history = build_history(sheet1, meaning_map)
 
