@@ -156,7 +156,7 @@ def check_api():
         import anthropic as _a   # noqa
         try:
             key = st.secrets["ANTHROPIC_API_KEY"]
-        except (KeyError, FileNotFoundError):
+        except Exception:          # ← catch anything, not just KeyError/FileNotFoundError
             key = os.environ.get("ANTHROPIC_API_KEY", "")
         if key:
             os.environ["ANTHROPIC_API_KEY"] = key
