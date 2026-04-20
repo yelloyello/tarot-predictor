@@ -22,7 +22,7 @@ CACHE_FILE    = "resonance_cache.json"
 DATA_FILE     = "data.xlsx"
 API_MODEL     = "claude-sonnet-4-5"
 
-os.environ["ANTHROPIC_API_KEY"] = "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"   # ← paste key here temporarily
+os.environ["ANTHROPIC_API_KEY"] = ""   # ← paste key here temporarily
 
 BALANCE_MIN   = 0.35
 ASPECTS_DELTA = 0.15
