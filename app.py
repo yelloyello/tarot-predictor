@@ -20,7 +20,7 @@ st.set_page_config(page_title="Tarot Predictor V9", layout="wide")
 # ─────────────────────────────────────────────────────────────────────────────
 CACHE_FILE    = "resonance_cache.json"
 DATA_FILE     = "data.xlsx"
-API_MODEL     = "claude-sonnet-4-5"
+API_MODEL     = "claude-sonnet-4-6"
 
 os.environ["ANTHROPIC_API_KEY"] = "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"   # ← paste key here temporarily
 
@@ -167,9 +167,10 @@ if 'rcache' not in st.session_state:
 # API RESONANCE CLASSIFICATION
 # ─────────────────────────────────────────────────────────────────────────────
 _API_READY = None
+_API_ERROR = None
 
 def check_api():
-    global _API_READY
+    global _API_READY, _API_ERROR
     if _API_READY is not None:
         return _API_READY
     try:
@@ -178,11 +179,25 @@ def check_api():
             key = st.secrets["ANTHROPIC_API_KEY"]
         except Exception:
             key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if key:
-            os.environ["ANTHROPIC_API_KEY"] = key
-        _API_READY = bool(key)
+        if not key:
+            _API_READY = False
+            _API_ERROR = "No API key found."
+            return False
+        os.environ["ANTHROPIC_API_KEY"] = key
+        # Actually test the key with a minimal call
+        client = _a.Anthropic(api_key=key)
+        client.messages.create(
+            model=API_MODEL, max_tokens=5,
+            messages=[{"role": "user", "content": "ping"}]
+        )
+        _API_READY = True
+        _API_ERROR = None
     except ImportError:
         _API_READY = False
+        _API_ERROR = "anthropic package not installed."
+    except Exception as e:
+        _API_READY = False
+        _API_ERROR = str(e)
     return _API_READY
 
 _PROMPT = """You are analysing two tarot cards for a homeostatic balancing prediction system.
@@ -230,7 +245,8 @@ def api_resonance(card, mf):
         raw  = resp.content[0].text.strip()
         raw  = re.sub(r'^```[a-z]*\n?', '', raw).rstrip('`').strip()
         d    = json.loads(raw)
-    except Exception:
+    except Exception as e:
+        st.warning(f"⚠ API call failed for ({card}, {mf}): {e} — falling back to TF-IDF")
         return tfidf_resonance(card, mf)
 
     st.session_state.rcache[key] = d
@@ -788,7 +804,8 @@ cache_size = len(st.session_state.rcache)
 if api_ok:
     st.success(f"✅ Semantic API active — {cache_size} resonance pair{'s' if cache_size != 1 else ''} cached to disk")
 else:
-    st.warning("⚠ ANTHROPIC_API_KEY not found — using TF-IDF keyword fallback. Set the key for full semantic analysis.")
+    err_detail = f": {_API_ERROR}" if _API_ERROR else ""
+    st.warning(f"⚠ Semantic API unavailable{err_detail} — using TF-IDF keyword fallback.")
 
 st.divider()
 
