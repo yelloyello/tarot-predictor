@@ -22,7 +22,7 @@ CACHE_FILE    = "resonance_cache.json"
 DATA_FILE     = "data.xlsx"
 API_MODEL     = "claude-sonnet-4-6"
 
-os.environ["ANTHROPIC_API_KEY"] = "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"   # ← paste key here temporarily
+os.environ["ANTHROPIC_API_KEY"] = "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"   # ← paste key here temporarily
 
 BALANCE_MIN   = 0.35
 ASPECTS_DELTA = 0.15
@@ -179,6 +179,7 @@ def check_api():
             key = st.secrets["ANTHROPIC_API_KEY"]
         except Exception:
             key = os.environ.get("ANTHROPIC_API_KEY", "")
+        key = key.strip()   # strip whitespace/invisible chars from pasted keys
         if not key:
             _API_READY = False
             _API_ERROR = "No API key found."
@@ -346,7 +347,8 @@ def build_history(_s1, _mm):
 
     # co_occur index: base_card -> list of every match that card appeared in
     # (any position: home, away, or mf)
-    co_occur = defaultdict(list)
+    co_occur  = defaultdict(list)
+    mf_index  = defaultdict(list)   # base_mf -> matches where that card was the MF
     for _, r in _s1.iterrows():
         outcome = nm(r.get('Outcome', ''))
         if not outcome: continue
@@ -356,6 +358,7 @@ def build_history(_s1, _mm):
         match_ctx = {'home': h, 'away': a, 'mf': mf, 'outcome': outcome}
         for card in {base_card(h), base_card(a), base_card(mf)}:
             co_occur[card].append(match_ctx)
+        mf_index[base_card(mf)].append(match_ctx)
 
     # Freeze to plain dicts for caching
     def freeze_record(d):
@@ -373,6 +376,7 @@ def build_history(_s1, _mm):
         'exact':    freeze_exact(exact),
         'no_match': freeze_no_match(no_match),
         'co_occur': dict(co_occur),
+        'mf_index': dict(mf_index),
     }
 
 _history = build_history(sheet1, meaning_map)
@@ -513,92 +517,117 @@ def historical_notes(home, away, mf):
 def _co_occur_note(home, away, mf):
     """
     Broad co-occurrence search (display-only, no scoring weight).
-    Finds every past match where the MF energy (or its rx flip) AND at least
-    one team card energy (or their rx flips) appeared together in any position
-    (home, away, or mf column).  Returns a note dict or None.
+
+    Three perspectives — in each, we ask: when card X was the Match Force,
+    did any of the other two relevant cards appear as team cards?
+
+      Perspective A: Home card was MF → look for current MF or Away as team cards
+      Perspective B: Away card was MF → look for current MF or Home as team cards
+      Perspective C: Current MF was MF → look for Home or Away as team cards
+
+    All comparisons are rx-normalised (base_card strips the rx suffix so upright
+    and reversed versions are treated as the same energy).
     """
-    co = _history.get('co_occur', {})
+    mf_idx = _history.get('mf_index', {})
 
     bh  = base_card(home)
     ba  = base_card(away)
     bmf = base_card(mf)
 
-    # Candidate bases to look for: MF + both team cards (all rx-normalised)
-    mf_bases   = {bmf}
-    home_bases = {bh}
-    away_bases = {ba}
+    def _tally_str(t):
+        return f"Home {t['Home']}× Away {t['Away']}× Draw {t['Draw']}×"
 
-    # Gather all matches that contain the MF energy in any position
-    mf_matches = co.get(bmf, [])
+    def _dominant(t):
+        total = sum(t.values())
+        if total == 0:
+            return None, 0, 0
+        d = max(t, key=t.get)
+        return d, t[d], total
 
-    # Filter: row must also contain home OR away energy in any position
-    def cards_in_row(m):
-        return {base_card(m['home']), base_card(m['away']), base_card(m['mf'])}
+    def _scan(mf_base, target_bases, label_mf_card, label_targets):
+        """
+        Find matches where mf_base was the MF and at least one card from
+        target_bases appeared as a team card (home or away position).
+        Returns a note dict or None.
+        """
+        matches = mf_idx.get(mf_base, [])
+        hits = {}   # key -> match_ctx (deduplicate)
+        for m in matches:
+            row_team_bases = {base_card(m['home']), base_card(m['away'])}
+            found = row_team_bases & target_bases
+            if found:
+                key = (m['home'], m['away'], m['mf'])
+                hits[key] = m
 
-    hits_home, hits_away, hits_both = [], [], []
-    seen = set()
-    for m in mf_matches:
-        key = (m['home'], m['away'], m['mf'])
-        if key in seen:
-            continue
-        seen.add(key)
-        row_bases = cards_in_row(m)
-        has_h = bh in row_bases
-        has_a = ba in row_bases
-        if has_h and has_a:
-            hits_both.append(m)
-        elif has_h:
-            hits_home.append(m)
-        elif has_a:
-            hits_away.append(m)
+        if not hits:
+            return None
 
-    all_hits = hits_both + hits_home + hits_away
-    if not all_hits:
-        return None
+        all_hits = list(hits.values())
+        tally = {'Home': 0, 'Away': 0, 'Draw': 0}
+        for m in all_hits:
+            tally[m['outcome']] = tally.get(m['outcome'], 0) + 1
 
-    # Build outcome tally across all hits
-    tally = {'Home': 0, 'Away': 0, 'Draw': 0}
-    for m in all_hits:
-        tally[m['outcome']] = tally.get(m['outcome'], 0) + 1
-    total = sum(tally.values())
+        dom, dom_n, total = _dominant(tally)
 
-    parts = []
-    if hits_both:
-        parts.append(f"{len(hits_both)} with **both** team cards present")
-    if hits_home:
-        parts.append(f"{len(hits_home)} with **{home}** only")
-    if hits_away:
-        parts.append(f"{len(hits_away)} with **{away}** only")
+        return {
+            'label': (
+                f"🔎 When **{label_mf_card}** was MF: "
+                f"{label_targets} appeared as a team card "
+                f"in {total} past match{'es' if total > 1 else ''}"
+            ),
+            'summary': (
+                f"{_tally_str(tally)} — "
+                f"**{dom}** dominant ({dom_n/total:.0%}). "
+                f"Display only — not factored into confidence score."
+            ),
+            'matches':      _format_matches(all_hits[:15]),
+            'home_pts':     0.0,
+            'away_pts':     0.0,
+            '_display_only': True,
+        }
 
-    tally_str = f"Home {tally['Home']}× Away {tally['Away']}× Draw {tally['Draw']}×"
-    dominant  = max(tally, key=tally.get)
-    dom_pct   = tally[dominant] / total if total else 0
+    notes = []
 
-    formatted = _format_matches(all_hits[:15])  # cap display at 15
+    # Perspective A: Home card was the MF — did current MF or Away appear as team?
+    if bh != bmf and bh != ba:   # skip if cards are the same energy
+        note = _scan(
+            mf_base      = bh,
+            target_bases = {bmf, ba},
+            label_mf_card = home,
+            label_targets = f"**{mf}** or **{away}**",
+        )
+        if note:
+            notes.append(note)
 
-    return {
-        'label':   (
-            f"🔎 Co-occurrence: **{mf}** (MF energy) + team cards appeared together "
-            f"in {total} past match{'es' if total > 1 else ''}"
-        ),
-        'summary': (
-            f"{'; '.join(parts)}. Outcomes: {tally_str} — "
-            f"**{dominant}** dominant ({dom_pct:.0%}). "
-            f"Display only — not factored into confidence score."
-        ),
-        'matches':   formatted,
-        'home_pts':  0.0,   # informational only, no scoring weight
-        'away_pts':  0.0,
-        '_display_only': True,
-    }
+    # Perspective B: Away card was the MF — did current MF or Home appear as team?
+    if ba != bmf and ba != bh:
+        note = _scan(
+            mf_base      = ba,
+            target_bases = {bmf, bh},
+            label_mf_card = away,
+            label_targets = f"**{mf}** or **{home}**",
+        )
+        if note:
+            notes.append(note)
+
+    # Perspective C: Current MF was the MF — did Home or Away appear as team?
+    note = _scan(
+        mf_base      = bmf,
+        target_bases = {bh, ba},
+        label_mf_card = mf,
+        label_targets = f"**{home}** or **{away}**",
+    )
+    if note:
+        notes.append(note)
+
+    return notes   # list (may be empty)
 
 
 def historical_signal(home, away, mf):
     notes = historical_notes(home, away, mf)
 
-    # Always append the broad co-occurrence note at the bottom (display only)
-    co_note = _co_occur_note(home, away, mf)
-    if co_note:
+    # Always append the broad co-occurrence notes at the bottom (display only)
+    for co_note in _co_occur_note(home, away, mf):
         notes.append(co_note)
 
     if not notes:
