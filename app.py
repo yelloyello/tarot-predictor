@@ -14,6 +14,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import json, os, re
+from analysis_engine import (analyse_match_full, analysis_to_prediction,
+                              gather_history_text, ANALYSIS_PREFIX)
 from collections import defaultdict
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -26,7 +28,7 @@ st.set_page_config(page_title="Tarot Predictor V10", layout="wide")
 CACHE_FILE      = "resonance_cache.json"
 DATA_FILE       = "data.xlsx"
 MF_LOOKUP_FILE  = "mf_lookup.xlsx"
-API_MODEL = "claude-opus-4-6"
+API_MODEL       = "claude-sonnet-4-20250514"
 
 os.environ["ANTHROPIC_API_KEY"] = ""   # paste key here temporarily
 
@@ -689,11 +691,34 @@ def decide(home, away, mf):
 
 
 def predict(home, away, mf):
+    """
+    Primary path: holistic single API call (analyse_match_full).
+    Fallback: existing decide() + TF-IDF when API unavailable.
+    Returns (pred, conf, lines, hist_pred, hist_weight, hist_notes, full_analysis)
+    """
+    # ── Try holistic analysis first ──────────────────────────────────────────
+    if check_api():
+        result = analyse_match_full(
+            home, away, mf,
+            meaning_map     = meaning_map,
+            get_complement_fn = get_complement,
+            history         = _history,
+            mf_lookup_fn    = get_mf_lookup_entry,
+            base_card_fn    = base_card,
+            rcache          = st.session_state.rcache,
+            save_cache_fn   = _save_disk_cache,
+            api_model       = API_MODEL,
+        )
+        if result and '_error' not in result and 'call' in result:
+            pred, conf = analysis_to_prediction(result)
+            return pred, round(min(conf, 0.95), 2), [], None, 0.0, [], result
+
+    # ── Fallback: original decide() + historical signal ──────────────────────
     pred, conf, lines = decide(home, away, mf)
     hist_pred, hist_weight, hist_notes = historical_signal(home, away, mf)
     if hist_pred is not None and hist_weight >= 0.25:
-        conf = (conf * 0.65 + hist_weight * 0.35) if hist_pred==pred else conf*0.72
-    return pred, round(min(conf,0.95),2), lines, hist_pred, hist_weight, hist_notes
+        conf = (conf * 0.65 + hist_weight * 0.35) if hist_pred == pred else conf * 0.72
+    return pred, round(min(conf, 0.95), 2), lines, hist_pred, hist_weight, hist_notes, None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -835,6 +860,81 @@ def render_mf_lookup(mf):
         st.markdown(f"> {themes_raw}")
 
 
+def render_full_analysis(result, home, away, mf):
+    """Render the holistic analysis in clean, scannable format."""
+    icons_type = {'OPP': '🟢', 'SIM': '🔵', 'NONE': '⚫'}
+
+    # ── MF sense ─────────────────────────────────────────────────────────────
+    st.markdown(f"**⚡ {mf}** — {result.get('mf_quality','')}")
+    phrases = result.get('mf_key_phrases', [])
+    if phrases:
+        st.caption('  ·  '.join(f'*{p}*' for p in phrases))
+
+    st.markdown("---")
+
+    # ── Team cards ───────────────────────────────────────────────────────────
+    col1, col2 = st.columns(2)
+
+    for col, card, sense_key, type_key, phrases_key, tied_key, note_key in [
+        (col1, home, 'home_sense', 'home_type', 'home_phrases', 'home_tied_words', 'home_note'),
+        (col2, away, 'away_sense', 'away_type', 'away_phrases', 'away_tied_words', 'away_note'),
+    ]:
+        with col:
+            ctype  = result.get(type_key, 'NONE')
+            icon   = icons_type.get(ctype, '⚫')
+            label  = '🏠' if card == home else '✈'
+            dm     = result.get(type_key.replace('type','domain_match'), False)
+            dm_str = '' if dm else ' *(different domain)*'
+
+            st.markdown(f"**{label} {card}**")
+            st.markdown(f"*{result.get(sense_key, '')}*")
+            st.markdown(f"{icon} **{ctype}**{dm_str}")
+
+            for p in result.get(phrases_key, []):
+                st.markdown(f"- *\"{p}\"*")
+
+            tied = result.get(tied_key, [])
+            if tied:
+                st.caption(f"Tied with other card (neutral): {', '.join(tied)}")
+
+            note = result.get(note_key, '')
+            if note:
+                st.caption(note)
+
+    st.markdown("---")
+
+    # ── History ───────────────────────────────────────────────────────────────
+    st.markdown("**📊 History**")
+    for key, label in [
+        ('history_mf_pattern', 'MF pattern'),
+        ('history_direct',     'Direct'),
+        ('history_co',         'Together'),
+    ]:
+        val = result.get(key, '')
+        if val and val.lower() not in ('none', 'none found', ''):
+            st.markdown(f"- **{label}:** {val}")
+
+    hc = result.get('history_confirms', 'None')
+    call = result.get('call', 'Draw')
+    if hc and hc not in ('None', ''):
+        if hc == call:
+            st.markdown(f"- ✅ History agrees: **{hc}**")
+        elif hc == 'Conflicts':
+            st.markdown(f"- ⚠️ History conflicts with meaning analysis")
+        else:
+            st.markdown(f"- ➖ History neutral / insufficient data")
+
+    st.markdown("---")
+
+    # ── Call ──────────────────────────────────────────────────────────────────
+    call_icons = {'Home': '🟢', 'Away': '🔵', 'Draw': '🟡'}
+    ci = call_icons.get(call, '⚪')
+    st.markdown(f"**🎯 {ci} {call}**")
+    reason = result.get('reason', '')
+    if reason:
+        st.markdown(f"*{reason}*")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STREAMLIT UI
 # ─────────────────────────────────────────────────────────────────────────────
@@ -889,87 +989,94 @@ if comp and comp in meaning_map:
     st.caption(f"**MF complement** (what the Match Force creates a need for): _{comp}_ — _{meaning_map[comp][:90]}…_")
 
 if st.button("Predict", type="primary", use_container_width=True):
-    with st.spinner("Analysing resonance…"):
-        pred, conf, explanation, hist_pred, hist_weight, hist_notes = predict(home, away, mf)
+    with st.spinner("Reading cards and history…"):
+        pred, conf, explanation, hist_pred, hist_weight, hist_notes, full_analysis = predict(home, away, mf)
 
+    # ── Prediction header ────────────────────────────────────────────────────
     icons = {'Home':'🟢', 'Away':'🔵', 'Draw':'🟡'}
     col1, col2 = st.columns([3, 1])
     with col1: st.markdown(f"## {icons.get(pred,'⚪')} Prediction: **{pred}**")
     with col2: st.metric("Confidence", f"{conf:.0%}")
     st.progress(conf)
 
-    if conf >= 0.80:   st.caption("High confidence — a clear rule applies.")
-    elif conf >= 0.65: st.caption("Good confidence — methodology points clearly.")
-    elif conf >= 0.55: st.caption("Moderate confidence — hierarchy or close scores involved.")
-    else:              st.caption("Lower confidence — treat as a pointer; exercise judgement.")
+    if conf >= 0.80:   st.caption("High confidence.")
+    elif conf >= 0.65: st.caption("Good confidence.")
+    elif conf >= 0.55: st.caption("Moderate confidence — exercise judgement.")
+    else:              st.caption("Lower confidence — use as a pointer only.")
 
     st.divider()
-    st.markdown("#### Reasoning")
-    for i, line in enumerate(explanation):
-        st.markdown(f"{'→' if i < 2 else '⟹'} {line}")
 
-    # ── Historical signal ────────────────────────────────────────────
-    if hist_notes:
-        st.divider()
-        st.markdown("#### 📊 Historical card-MF relationships")
-        st.caption("Upright and reversed versions of a card are treated as the same energy.")
-        scored  = [n for n in hist_notes if not n.get('_display_only')]
-        display = [n for n in hist_notes if n.get('_display_only')]
+    # ── HOLISTIC ANALYSIS (primary path when API active) ────────────────────
+    if full_analysis and '_error' not in full_analysis:
+        render_full_analysis(full_analysis, home, away, mf)
 
-        for n in scored:
-            st.markdown(f"**{n['label']}**")
-            st.markdown(f"→ {n['summary']}")
-            if n['matches']:
-                with st.expander("Previous matches"):
-                    for ml in n['matches']: st.markdown(ml)
-            st.markdown("")
+        # Full match history in expander
+        with st.expander("📊 Full match history"):
+            ht = gather_history_text(
+                home, away, mf, _history, meaning_map,
+                get_mf_lookup_entry, base_card
+            )
+            st.text(ht)
 
-        if hist_pred is not None and hist_weight >= 0.25:
-            if hist_pred == pred:
-                st.success(f"✅ Historical data agrees with **{pred}** — confidence boosted")
-            else:
-                st.warning(f"⚠ Historical data points to **{hist_pred}** (weight {hist_weight:.0%}) — conflicts with resonance prediction")
-        elif scored:
-            st.info("Historical data found but signal too weak or balanced to shift prediction.")
+    else:
+        # ── FALLBACK: original reasoning + history blocks ────────────────────
+        st.markdown("#### Reasoning")
+        for i, line in enumerate(explanation):
+            st.markdown(f"{'→' if i < 2 else '⟹'} {line}")
 
-        if display:
+        if full_analysis and '_error' in full_analysis:
+            st.warning(f"Holistic analysis failed: {full_analysis['_error']} — showing TF-IDF fallback.")
+
+        if hist_notes:
             st.divider()
-            st.markdown("#### 🔎 Broad co-occurrence (informational only)")
-            for n in display:
+            st.markdown("#### 📊 Historical card-MF relationships")
+            scored  = [n for n in hist_notes if not n.get('_display_only')]
+            display = [n for n in hist_notes if n.get('_display_only')]
+            for n in scored:
                 st.markdown(f"**{n['label']}**")
                 st.markdown(f"→ {n['summary']}")
                 if n['matches']:
-                    with st.expander("Matching past matches"):
+                    with st.expander("Previous matches"):
                         for ml in n['matches']: st.markdown(ml)
                 st.markdown("")
+            if hist_pred is not None and hist_weight >= 0.25:
+                if hist_pred == pred:
+                    st.success(f"✅ Historical data agrees with **{pred}**")
+                else:
+                    st.warning(f"⚠ Historical data points to **{hist_pred}** ({hist_weight:.0%}) — conflicts")
+            if display:
+                st.divider()
+                st.markdown("#### 🔎 Co-occurrence (informational)")
+                for n in display:
+                    st.markdown(f"**{n['label']}**"); st.markdown(f"→ {n['summary']}")
+                    if n['matches']:
+                        with st.expander("Matches"):
+                            for ml in n['matches']: st.markdown(ml)
 
-    # ── NEW: Literal Meaning Analysis ────────────────────────────────
-    st.divider()
-    with st.expander("📖 Literal Meaning Analysis — exact phrases from your meanings sheet"):
-        render_meaning_analysis(home, away, mf)
+        # Literal meaning analysis (fallback only)
+        with st.expander("📖 Literal Meaning Analysis"):
+            render_meaning_analysis(home, away, mf)
 
-    # ── NEW: MF Lookup Reference ──────────────────────────────────────
-    with st.expander(f"📋 MF Lookup Reference — your notes on **{mf}** as a Match Force"):
+    # ── MF Lookup always available ───────────────────────────────────────────
+    with st.expander(f"📋 MF Lookup — your notes on {mf}"):
         if _mf_lookup_df is not None:
             render_mf_lookup(mf)
         else:
-            st.caption(
-                f"Put **{MF_LOOKUP_FILE}** in the same folder as this app to see your "
-                f"personal MF match notes here. The file is already partially built — "
-                f"just name it exactly '{MF_LOOKUP_FILE}'."
-            )
+            st.caption(f"Add {MF_LOOKUP_FILE} to the app folder to see your notes here.")
 
-    # ── Card meanings ─────────────────────────────────────────────────
-    with st.expander("Card meanings"):
+    # ── Card meanings ─────────────────────────────────────────────────────────
+    with st.expander("Card meanings (full text)"):
         for label, c in [("Home", home), ("Match Force", mf), ("Away", away)]:
             st.markdown(f"**{label}: {c}**")
-            st.write(meaning_map.get(c,'—')[:280])
+            st.write(meaning_map.get(c, '—'))
             cp = get_complement(c)
             if cp and cp in meaning_map:
-                st.markdown(f"*Complement — {cp}:* {meaning_map[cp][:150]}")
+                st.markdown(f"*Complement — {cp}:* {meaning_map[cp][:200]}")
             st.divider()
 
-    st.caption(f"Cache: {len(st.session_state.rcache)} pairs stored. Each unique (card, MF) pair queried once.")
+    analysis_count = sum(1 for k in st.session_state.rcache if k.startswith(ANALYSIS_PREFIX))
+    pair_count     = sum(1 for k in st.session_state.rcache if not k.startswith(ANALYSIS_PREFIX))
+    st.caption(f"Cache: {analysis_count} match analyses · {pair_count} pair resonances stored.")
 
 st.divider()
 with st.expander("Decision rules (in priority order)"):
