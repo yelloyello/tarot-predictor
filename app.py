@@ -28,7 +28,7 @@ st.set_page_config(page_title="Tarot Predictor V10", layout="wide")
 CACHE_FILE      = "resonance_cache.json"
 DATA_FILE       = "data.xlsx"
 MF_LOOKUP_FILE  = "mf_lookup.xlsx"
-API_MODEL       = "claude-sonnet-4-20250514"
+API_MODEL = "claude-sonnet-4-6"
 
 os.environ["ANTHROPIC_API_KEY"] = ""   # paste key here temporarily
 
