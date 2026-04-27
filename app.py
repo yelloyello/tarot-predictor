@@ -270,8 +270,8 @@ def load_mf_lookup():
     The mf_lookup.xlsx has 4 cols: index, Match Force (card name), Winners, Description.
     Header is on row 1; data starts on row 2.
 
-    Returns a dict {df: DataFrame|None, error: str|None, path: str|None} so the UI
-    can show why loading failed when it does.
+    Tolerant to sheet naming: tries 'MF Lookup' first, then any sheet whose name
+    contains 'lookup' (case-insensitive), then falls back to the first sheet.
     """
     path = _resolve(MF_LOOKUP_FILE)
     if not os.path.exists(path):
@@ -279,7 +279,28 @@ def load_mf_lookup():
                 'error': f"File not found at {path} (also tried {_HERE} and CWD)",
                 'path': None}
     try:
-        df = pd.read_excel(path, sheet_name='MF Lookup')
+        # Find the right sheet
+        xl = pd.ExcelFile(path)
+        sheets = xl.sheet_names
+        chosen = None
+        # exact match first
+        for s in sheets:
+            if s == 'MF Lookup':
+                chosen = s; break
+        # case-insensitive 'lookup' match
+        if chosen is None:
+            for s in sheets:
+                if 'lookup' in s.lower():
+                    chosen = s; break
+        # first sheet as final fallback
+        if chosen is None and sheets:
+            chosen = sheets[0]
+        if chosen is None:
+            return {'df': None,
+                    'error': f"No sheets found in {path}",
+                    'path': path}
+
+        df = pd.read_excel(path, sheet_name=chosen)
         cols = list(df.columns)
         if len(cols) >= 4:
             df = df.iloc[:, [1, 2, 3]].copy()
@@ -289,9 +310,10 @@ def load_mf_lookup():
             df.columns = ['card_cell', 'winners', 'description']
         else:
             return {'df': None,
-                    'error': f"Sheet has only {len(cols)} columns; expected 3 or 4",
+                    'error': f"Sheet '{chosen}' has only {len(cols)} columns; expected 3 or 4",
                     'path': path}
-        return {'df': df, 'error': None, 'path': path}
+        return {'df': df, 'error': None, 'path': path, 'sheet': chosen,
+                'available_sheets': sheets}
     except Exception as e:
         return {'df': None,
                 'error': f"{type(e).__name__}: {e}",
@@ -640,9 +662,13 @@ def render_mf_lookup_section(mf):
         return
 
     upright_row  = get_mf_lookup_row(upright_name)
-    reversed_row = (get_mf_lookup_row(reversed_name)
-                    or get_mf_lookup_row(base + 'rx')
-                    or get_mf_lookup_row(base + ' rx'))
+
+    # pandas Series can't be used with `or` — check explicitly for None
+    reversed_row = get_mf_lookup_row(reversed_name)
+    if reversed_row is None:
+        reversed_row = get_mf_lookup_row(base + 'rx')
+    if reversed_row is None:
+        reversed_row = get_mf_lookup_row(base + ' rx')
 
     def cell_text(row, col):
         if row is None: return None
@@ -873,7 +899,8 @@ else:
     st.warning(f"⚠ Semantic API unavailable{err} — using TF-IDF keyword fallback.")
 
 if _mf_lookup_df is not None:
-    st.info(f"📋 MF Lookup loaded — {len(_mf_lookup_df)} entries from `{_mf_lookup_path}`")
+    sheet_used = _mf_lookup_result.get('sheet', '?')
+    st.info(f"📋 MF Lookup loaded — {len(_mf_lookup_df)} entries from `{_mf_lookup_path}` (sheet: `{sheet_used}`)")
 else:
     st.warning(
         f"📋 MF Lookup NOT loaded — looked for `{MF_LOOKUP_FILE}`. "
