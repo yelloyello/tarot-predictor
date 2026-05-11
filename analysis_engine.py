@@ -46,7 +46,7 @@ SPECIFICITY DIRECTIVE
 import json, re, os
 
 ANALYSIS_PREFIX = "ANALYSIS||"
-RULES_VERSION = "rules_v3"   # bump when prompt or rule layer changes meaningfully
+RULES_VERSION = "rules_v5"   # bump when prompt or rule layer changes meaningfully
 
 
 def _extract_json(text):
@@ -214,25 +214,68 @@ literal opposite of a phrase in the meaning text. Vague resonance does not
 qualify. Quote the EXACT phrase from each side that makes the connection.
 
 ═══════════════════════════════════════════════════════════════════════
-SHARED-THEME CHECK
+SHARED-THEME CHECK (all three cards)
 ═══════════════════════════════════════════════════════════════════════
-Separately, check whether ALL THREE cards (Home, Away, MF) share a single
-dominant energetic theme (e.g. all relate to "lack of clarity", all relate
-to "control struggles", all relate to "endings"). If yes — flag this. When
-all three cards crowd the same thematic space, no team has unique purchase
-on the MF energy, and the rule layer will resolve to Draw.
+Check whether ALL THREE cards (Home, Away, MF) share a single dominant
+energetic theme (e.g. all relate to "lack of clarity", all relate to
+"control struggles", all relate to "endings"). If yes — flag this. When
+all three cards crowd the same thematic space, no team has unique
+purchase on the MF energy, and the rule layer will resolve to Draw.
+
+═══════════════════════════════════════════════════════════════════════
+SAME-TYPE PRINCIPLE — CLASSIFY DELIBERATELY (CRITICAL)
+═══════════════════════════════════════════════════════════════════════
+The rule layer treats both-OPP as Draw and both-SIM as Draw — regardless
+of rank, regardless of whether the cards engage the same MF trait. So
+your SIM/OPP/NONE classification directly determines this outcome.
+
+Be DELIBERATE about classification. A team card's classification reflects
+its DOMINANT relationship to the MF — not the first/most-obvious one.
+
+  WORKED EXAMPLE (do NOT repeat this mistake)
+  MF: 8Wrx — multiple traits including "stopping of momentum",
+    "unfinished business / things stuck", "lethargy", "impulsiveness",
+    "domestic disputes", etc.
+  6S has the following candidate connections:
+    SIM: "pulling back, creating distance" ≈ MF "stopping"
+    SIM: "exhaustion, lethargy, weary" ≈ MF "sluggishness"
+    OPP: "moving on, putting past behind" ↔ MF "unfinished business / stuck"
+    OPP: "regaining balance and control" ↔ MF "out of control"
+    OPP: "stability, escaping to calmer waters" ↔ MF "chaos, panic, drama"
+    OPP: "healing, recovery" ↔ MF "deteriorating"
+  → The OPP relationships are MORE NUMEROUS and AS LITERAL as the SIM
+    ones. Classifying as SIM here would be wrong; the card's dominant
+    posture toward this MF is destabilising — OPP.
+
+WHEN A CARD HAS BOTH SIM AND OPP CANDIDATES:
+- Count the meaningful connections of each type
+- Weigh how literal/specific each is
+- Pick the type that has the BROADER and MORE LITERAL set of engagements
+- Tie-break in favour of OPP (destabilising is the more active form of control)
+
+═══════════════════════════════════════════════════════════════════════
+CONTESTED-TRAIT BACKUP CHECK (lower priority)
+═══════════════════════════════════════════════════════════════════════
+If, after applying the same-type principle above, you DO classify one team
+as SIM and the other as OPP, still walk the MF traits and check: does any
+single MF trait have meaningful connections from BOTH teams (one SIM, one
+OPP via different bullets)? List those in contested_mf_traits.
+
+This is a safety net for cases where SIM/OPP genuinely apply but the cards
+also share thematic engagement with one specific MF trait — the rule layer
+will treat that as a deadlock and Draw.
 
 ═══════════════════════════════════════════════════════════════════════
 OUTPUT — SIM / OPP / NONE FOR EACH TEAM CARD
 ═══════════════════════════════════════════════════════════════════════
-You do NOT decide the final Home/Away/Draw call. The rule layer applies the
-hierarchy, pip-pip, duplicate, and shared-theme rules deterministically over
-your SIM/OPP/NONE classifications. Your job is purely to read the meanings
-meticulously and classify each side.
+You do NOT decide the final Home/Away/Draw call. The rule layer applies
+all the rules (hierarchy, pip-pip, duplicate, same-type, shared-theme,
+contested-trait) deterministically over your classifications.
 
-If a team card has both a SIM connection (to one MF trait) and an OPP
-connection (to a different MF trait), choose whichever is the STRONGER /
-more specific / more literal match, and note the other in your reasoning.
+LIST ALL MEANINGFUL CONNECTIONS in home_connections and away_connections,
+not just the single strongest. If 6S has FOUR meaningful trait connections
+to MF aspects, list ALL FOUR — even if one is the headline. The classifier
+needs to see the full picture to decide between SIM and OPP.
 
 ═══════════════════════════════════════════════════════════════════════
 INPUT
@@ -279,6 +322,9 @@ RESPOND WITH ONLY VALID JSON, NO MARKDOWN FENCES
 
   "shared_theme": false,
   "shared_theme_note": "if true, name the theme all three cards share; otherwise empty string",
+
+  "contested_mf_traits": ["MF trait that BOTH home and away meaningfully engage with — list each contested trait separately, empty array if none"],
+  "contested_note": "if any contested traits, briefly explain how each side engages the same trait; otherwise empty string",
 
   "history_signal": "one sentence on whether history meaningfully supports a side or is neutral",
 
@@ -407,6 +453,10 @@ def analyse_match_full(home, away, mf, meaning_map, get_complement_fn,
     home_type = result.get('home_type', 'NONE')
     away_type = result.get('away_type', 'NONE')
     shared_theme = bool(result.get('shared_theme', False))
+    contested_mf_traits = result.get('contested_mf_traits', []) or []
+    # Defensive: ensure it's a list of strings
+    if not isinstance(contested_mf_traits, list):
+        contested_mf_traits = []
 
     rule_call, rule_reason, rule_path = _apply_rules(
         home_type=home_type, away_type=away_type,
@@ -414,6 +464,7 @@ def analyse_match_full(home, away, mf, meaning_map, get_complement_fn,
         home=home, away=away, mf=mf,
         bh=bh, ba=ba, bmf=bmf,
         shared_theme=shared_theme,
+        contested_mf_traits=contested_mf_traits,
     )
     if rule_call is not None:
         result['call']      = rule_call
@@ -432,16 +483,23 @@ def analyse_match_full(home, away, mf, meaning_map, get_complement_fn,
 # RULE LAYER — deterministic application of the v3 ruleset
 # ════════════════════════════════════════════════════════════════════════
 def _apply_rules(home_type, away_type, home_rank, away_rank, mf_rank,
-                 home, away, mf, bh, ba, bmf, shared_theme):
+                 home, away, mf, bh, ba, bmf, shared_theme,
+                 contested_mf_traits=None):
     """
-    Apply the v3 ruleset over the AI's SIM/OPP/NONE classifications.
+    Apply the v4 ruleset over the AI's SIM/OPP/NONE classifications.
     Returns (call, reason, rule_path).
+
+    v4 adds: contested-trait deadlock. When the AI flags one or more MF
+    traits that BOTH team cards meaningfully engage with (regardless of
+    SIM/OPP polarity), the cards cancel thematically → Draw, irrespective
+    of rank.
     """
     h, a = home_type, away_type
     h_rn = RANK_ORDER.get(home_rank, 1)
     a_rn = RANK_ORDER.get(away_rank, 1)
     h_is_pip = home_rank == 'pip'
     a_is_pip = away_rank == 'pip'
+    contested_mf_traits = contested_mf_traits or []
 
     # ── STEP 1: DUPLICATE-CARD RULES (highest priority — override hierarchy) ──
     if bh == bmf and ba == bmf:
@@ -522,30 +580,38 @@ def _apply_rules(home_type, away_type, home_rank, away_rank, mf_rank,
                 f'Home ({home}) has no connection → Away controls the MF.',
                 f'only-Away-engages ({a}) -> Away')
 
-    # ── STEP 5: BOTH SIM → Draw ────────────────────────────────────────
+    # ── STEP 5: BOTH SAME TYPE → Draw (regardless of rank, regardless of
+    # whether they engage the same or different MF traits) ─────────────
+    # The principle: when both teams provide an equal MIRRORING force, neither
+    # destabilises so neither controls → Draw. When both teams provide an equal
+    # OPPOSING force, both equally destabilise so neither uniquely controls →
+    # Draw. Home and Away can engage DIFFERENT MF traits and this still holds:
+    # what matters is the TYPE of relationship, not which trait it lands on.
     if h == 'SIM' and a == 'SIM':
         return ('Draw',
                 'Both teams mirror the MF — no destabilising force to take '
                 'control → Draw.',
                 'both-SIM -> Draw')
-
-    # ── STEP 6: BOTH OPP — defer to rank, else specificity ─────────────
     if h == 'OPP' and a == 'OPP':
-        if h_rn > a_rn:
-            return ('Home',
-                    f'Both teams destabilise the MF, but Home ({home}, {home_rank}) '
-                    f'outranks Away ({away}, {away_rank}) → Home wins.',
-                    f'both-OPP + Home rank ({home_rank}) > Away ({away_rank}) -> Home')
-        if a_rn > h_rn:
-            return ('Away',
-                    f'Both teams destabilise the MF, but Away ({away}, {away_rank}) '
-                    f'outranks Home ({home}, {home_rank}) → Away wins.',
-                    f'both-OPP + Away rank ({away_rank}) > Home ({home_rank}) -> Away')
-        # Equal rank, both OPP — defer to AI confidence / specificity
         return ('Draw',
-                'Both teams destabilise the MF at equal rank with no specificity '
-                'gap visible → Draw.',
-                'both-OPP same-rank -> Draw (no specificity gap)')
+                f'Both teams destabilise the MF (Home via its OPP traits, Away '
+                f'via its OPP traits — possibly different MF aspects). Both '
+                f'apply equal opposing force, so neither uniquely controls → Draw.',
+                'both-OPP -> Draw')
+
+    # ── STEP 5b: CONTESTED-TRAIT SAFETY NET ────────────────────────────
+    # If the AI returned a SIM/OPP mismatch but ALSO flagged that both teams
+    # engage the same MF trait, that's the trait deadlock case from the
+    # Judgement/6S/8Wrx example — both engage the "stuck/unfinished" trait
+    # via different lenses. Treat as Draw rather than letting OPP win.
+    if contested_mf_traits:
+        contested_preview = ', '.join(f'"{t}"' for t in contested_mf_traits[:2])
+        more = f' (+{len(contested_mf_traits)-2} more)' if len(contested_mf_traits) > 2 else ''
+        return ('Draw',
+                f'Both teams engage the same MF trait{"s" if len(contested_mf_traits) > 1 else ""} — '
+                f'{contested_preview}{more} — even though their AI classifications '
+                f'differ, they cancel on the contested trait → Draw.',
+                f'contested-trait deadlock -> Draw')
 
     # ── STEP 7: ONE SIM, ONE OPP — apply exceptions then standard rule ─
     # PIP-PIP EXCEPTION: both pips, one SIM one OPP → Draw
