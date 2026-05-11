@@ -556,22 +556,38 @@ def get_mf_draw_rate(mf):
 
 # ─── Predict ────────────────────────────────────────────────────────────
 def predict(home, away, mf):
-    if check_api():
-        result = analyse_match_full(
-            home, away, mf,
-            meaning_map     = meaning_map,
-            get_complement_fn = get_complement,
-            history         = _history,
-            mf_lookup_fn    = get_mf_lookup_entry,
-            base_card_fn    = base_card,
-            rcache          = st.session_state.rcache,
-            save_cache_fn   = _save_disk_cache,
-            api_model       = API_MODEL,
-        )
-        if result and '_error' not in result and 'call' in result:
-            pred, conf = analysis_to_prediction(result)
-            return pred, round(min(conf, 0.95), 2), [], None, 0.0, [], result
-    return 'Draw', 0.55, ['(API unavailable)'], None, 0.0, [], None
+    # Distinguish three failure modes so the UI can show a useful message:
+    #   1. API not configured / not reachable -> "API unavailable"
+    #   2. API call ran but errored or returned unparseable text -> show real error
+    #   3. API call succeeded but no 'call' key -> show malformed-response notice
+    if not check_api():
+        return 'Draw', 0.55, ['(API unavailable — check the warning banner at the top of the page)'], \
+               None, 0.0, [], None
+
+    result = analyse_match_full(
+        home, away, mf,
+        meaning_map     = meaning_map,
+        get_complement_fn = get_complement,
+        history         = _history,
+        mf_lookup_fn    = get_mf_lookup_entry,
+        base_card_fn    = base_card,
+        rcache          = st.session_state.rcache,
+        save_cache_fn   = _save_disk_cache,
+        api_model       = API_MODEL,
+    )
+
+    if result and '_error' not in result and 'call' in result:
+        pred, conf = analysis_to_prediction(result)
+        return pred, round(min(conf, 0.95), 2), [], None, 0.0, [], result
+
+    # Surface the real reason for failure
+    if result and '_error' in result:
+        return 'Draw', 0.55, [f"API call failed: {result['_error']}"], \
+               None, 0.0, [], result   # keep result so error renders below
+    if result and 'call' not in result:
+        return 'Draw', 0.55, ['API returned a parseable response but it was missing the required "call" field.'], \
+               None, 0.0, [], result
+    return 'Draw', 0.55, ['Analysis returned no result (unknown reason)'], None, 0.0, [], None
 
 
 # ─── HERO STRIP — rendered via components.v1.html so HTML is parsed ─────
@@ -1117,12 +1133,18 @@ if st.button("Predict", type="primary", use_container_width=True):
     # AI analysis
     if full_analysis and '_error' not in full_analysis:
         render_full_analysis(full_analysis, home, away, mf)
-    elif explanation:
-        st.markdown('<div class="sec-header">Reasoning (fallback)</div>', unsafe_allow_html=True)
-        for i, line in enumerate(explanation):
-            st.markdown(f"{'→' if i < 2 else '⟹'} {line}")
+    else:
+        st.markdown('<div class="sec-header">⚠ Analysis unavailable</div>', unsafe_allow_html=True)
+        if explanation:
+            for line in explanation:
+                st.error(line)
         if full_analysis and '_error' in full_analysis:
-            st.warning(f"Holistic analysis failed: {full_analysis['_error']}")
+            # Show the raw error text in a code block so the user can see what went wrong
+            st.markdown("**Raw error from the analysis engine:**")
+            st.code(full_analysis['_error'], language=None)
+            st.caption("If this is a JSON parse error, the model returned text that wasn't a valid JSON object. "
+                       "Try clicking Predict again — transient parse failures are common. "
+                       "If it persists, the prompt may need adjustment.")
 
     # MF Lookup — upright + rx, description left, winners right
     render_mf_lookup_section(mf)
