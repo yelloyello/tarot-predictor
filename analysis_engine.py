@@ -49,6 +49,40 @@ ANALYSIS_PREFIX = "ANALYSIS||"
 RULES_VERSION = "rules_v3"   # bump when prompt or rule layer changes meaningfully
 
 
+def _extract_json(text):
+    """
+    Pull a JSON object out of a model response. Robust to:
+      - markdown fences (```json ... ``` or just ``` ... ```)
+      - leading/trailing prose around the JSON
+      - extra whitespace
+    Returns the parsed dict, or None if no valid JSON object can be recovered.
+    """
+    if not text:
+        return None
+    t = text.strip()
+    # Strip surrounding markdown fences if present
+    if t.startswith('```'):
+        t = re.sub(r'^```[a-zA-Z0-9_-]*\n?', '', t)
+        if t.endswith('```'):
+            t = t[:-3]
+        t = t.strip()
+    # Try a direct parse first
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+    # Fall back: find the first {...} object and parse it (greedy to last brace)
+    first = t.find('{')
+    last  = t.rfind('}')
+    if first != -1 and last != -1 and last > first:
+        candidate = t[first:last+1]
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+    return None
+
+
 def _akey(home, away, mf):
     return f"{ANALYSIS_PREFIX}{home}||{away}||{mf}"
 
@@ -358,13 +392,16 @@ def analyse_match_full(home, away, mf, meaning_map, get_complement_fn,
     if result is None:
         try:
             client = anthropic.Anthropic(api_key=api_key)
-            resp   = client.messages.create(model=api_model, max_tokens=1500,
+            resp   = client.messages.create(model=api_model, max_tokens=3000,
                                             messages=[{"role":"user","content":prompt}])
             raw    = resp.content[0].text.strip()
-            raw    = re.sub(r'^```[a-z]*\n?', '', raw).rstrip('`').strip()
-            result = json.loads(raw)
+            result = _extract_json(raw)
+            if result is None:
+                # Couldn't recover JSON — surface the raw text so the user can see
+                preview = raw[:600] + ('…' if len(raw) > 600 else '')
+                return {'_error': f'Could not parse JSON from model response. Raw text:\n{preview}'}
         except Exception as e:
-            return {'_error': str(e)}
+            return {'_error': f'{type(e).__name__}: {e}'}
 
     # ── DETERMINISTIC RULE LAYER ────────────────────────────────────────
     home_type = result.get('home_type', 'NONE')
