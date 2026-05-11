@@ -1011,7 +1011,31 @@ def render_full_analysis(result, home, away, mf):
     # ── Shared-theme flag ───────────────────────────────────────────────
     if result.get('shared_theme'):
         st_note = result.get('shared_theme_note', '') or 'all three cards share a dominant theme'
-        st.warning(f"⚠ **Shared theme detected:** {st_note} — rule layer will resolve to Draw.")
+        st.warning(f"⚠ **Shared theme detected (all three cards):** {st_note} — rule layer will resolve to Draw.")
+
+    # ── Contested-trait flag (v4) ───────────────────────────────────────
+    contested = result.get('contested_mf_traits', []) or []
+    if contested:
+        bullets = ''.join(f'<li><em>{t}</em></li>' for t in contested)
+        contested_note = result.get('contested_note', '')
+        note_html = ''
+        if contested_note:
+            note_html = (f'<div style="margin-top:8px;font-size:14px;color:#555;">'
+                         f'{contested_note}</div>')
+        plural = 's' if len(contested) > 1 else ''
+        st.markdown(
+            f'<div style="background:#fff4e6;border-left:4px solid #c47a1c;'
+            f'padding:12px 16px;margin:10px 0;border-radius:4px;">'
+            f'<strong>⚠ Contested MF trait{plural} (both teams engage):</strong>'
+            f'<ul style="margin:6px 0 0 18px;padding:0;">{bullets}</ul>'
+            f'{note_html}'
+            f'<div style="margin-top:8px;font-size:13px;color:#666;">'
+            f'Both team cards engage with the same MF trait via different '
+            f'phrasings → thematic deadlock → rule layer will resolve to Draw.'
+            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
 
     # ── History signal ──────────────────────────────────────────────────
     hist_sig = result.get('history_signal', '')
@@ -1195,24 +1219,29 @@ if st.button("Predict", type="primary", use_container_width=True):
 
 
 st.divider()
-with st.expander("Decision rules (v3)"):
+with st.expander("Decision rules (v5)"):
     st.markdown("""
 **A team controls the MF by:**
 - **SIM** — mirroring the MF (equal, same energy)
 - **OPP** — destabilising the MF (equal, opposing energy)
 
-**Primary rules:**
+**Primary rules (same-type principle):**
 1. Only one card connects → that team wins
-2. One SIM, one OPP → destabiliser (OPP) wins
-3. Both SIM → Draw
+2. Both team cards have the **same** type (both SIM or both OPP) → **Draw**
+   — *regardless of rank, regardless of whether they engage the same or different MF traits*
+   — when both apply equal force, neither uniquely controls
+3. One SIM, one OPP → destabiliser (OPP) wins
 4. Both NONE → Draw
 
 **Hierarchy:** Major > King > Queen > Knight > Page > pip
+*(Only matters for OPP-vs-SIM mismatches.)*
 
 **Exceptions (all resolve to Draw):**
 - **Hierarchy exception** — SIM at higher rank + OPP at lower rank → Draw
 - **Pip-pip exception** — both team cards are pips with one SIM + one OPP → Draw
 - **Shared-theme** — all three cards share a single dominant theme → Draw
+- **Contested-trait** — if AI returns SIM/OPP mismatch but both teams
+  engage the same MF trait → Draw (safety net for borderline classifications)
 
 **Duplicate-card rules** (when a team card shares MF base — hierarchy suspended):
 - Remaining card is SIM → MF matches with its duplicate → duplicate team wins
@@ -1222,6 +1251,9 @@ with st.expander("Decision rules (v3)"):
 **Specificity:** the AI compares at the TRAIT level (6-10 distinct trait
 clusters per card). Home and Away may connect to different MF aspects.
 Lesser-used niche traits count (e.g. "domestic goddess" vs "neglected home").
+When a card has both SIM and OPP candidate connections, the AI weighs the
+breadth and literalness of each set and picks the dominant type (tie-breaks
+favour OPP, since destabilising is the more active form of control).
 
 **Per-card data shown after each prediction:**
 - Hero strip — three card images at top
